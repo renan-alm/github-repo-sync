@@ -108,7 +108,7 @@ function prepareUrls(
 
   // Use sourceToken if provided, otherwise fall back to destinationToken for source
   const effectiveSourceToken = sourceToken || destinationToken;
-  
+
   if (effectiveSourceToken && srcUrl.startsWith("https://")) {
     srcUrl = srcUrl.replace(
       "https://",
@@ -239,18 +239,23 @@ async function getDefaultBranch() {
 async function getTryFallbackBranch(availableBranches) {
   // Try main first, then master
   const fallbackOptions = ["main", "master"];
-  
+
   for (const branch of fallbackOptions) {
     if (availableBranches.includes(branch)) {
       core.info(`Found fallback branch: ${branch}`);
       return branch;
     }
   }
-  
+
   return null;
 }
 
-async function syncBranches(sourceBranch, destinationBranch, syncAllBranches, useMainAsFallback) {
+async function syncBranches(
+  sourceBranch,
+  destinationBranch,
+  syncAllBranches,
+  useMainAsFallback,
+) {
   if (syncAllBranches) {
     core.info("=== Syncing All Branches ===");
 
@@ -269,27 +274,29 @@ async function syncBranches(sourceBranch, destinationBranch, syncAllBranches, us
     }
   } else {
     core.info("=== Syncing Single Branch ===");
-    
+
     // Check available branches first
     const availableBranches = await getSourceBranches();
     let actualSourceBranch = sourceBranch;
-    
+
     if (!availableBranches.includes(sourceBranch)) {
       if (useMainAsFallback) {
-        core.warning(`Branch "${sourceBranch}" not found. Trying main or master...`);
+        core.warning(
+          `Branch "${sourceBranch}" not found. Trying main or master...`,
+        );
         const fallbackBranch = await getTryFallbackBranch(availableBranches);
-        
+
         if (fallbackBranch) {
           actualSourceBranch = fallbackBranch;
           core.info(`✓ Using fallback branch: ${fallbackBranch}`);
         } else {
           throw new Error(
-            `Branch "${sourceBranch}" not found, and no fallback (main/master) available. Available branches: ${availableBranches.join(", ") || "none"}`
+            `Branch "${sourceBranch}" not found, and no fallback (main/master) available. Available branches: ${availableBranches.join(", ") || "none"}`,
           );
         }
       } else {
         throw new Error(
-          `Branch "${sourceBranch}" not found in source repository. Available branches: ${availableBranches.join(", ") || "none"}`
+          `Branch "${sourceBranch}" not found in source repository. Available branches: ${availableBranches.join(", ") || "none"}`,
         );
       }
     }
