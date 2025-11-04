@@ -1,5 +1,5 @@
 import * as core from "@actions/core";
-import simpleGit from "simple-git";
+import * as exec from "@actions/exec";
 import { createAppAuth } from "@octokit/auth-app";
 
 async function getAppInstallationToken(appId, privateKey, installationId) {
@@ -30,7 +30,9 @@ function readInputs() {
 
 function logInputs(inputs) {
   core.info(`Source: ${inputs.sourceRepo} (branch: ${inputs.sourceBranch})`);
-  core.info(`Destination: ${inputs.destinationRepo} (branch: ${inputs.destinationBranch})`);
+  core.info(
+    `Destination: ${inputs.destinationRepo} (branch: ${inputs.destinationBranch})`,
+  );
   core.info(`Sync all branches: ${inputs.syncAllBranches}`);
   core.info(`Sync tags: ${inputs.syncTags || "false"}`);
 }
@@ -59,34 +61,59 @@ async function authenticate(inputs) {
   }
 }
 
-async function setupGitConfig(git) {
+async function setupGitConfig() {
   core.info("=== Setting up Git Configuration ===");
   core.info("Configuring git user...");
   try {
-    await git.addConfig("user.name", "github-sync-action", false, ["--global"]);
-    await git.addConfig("user.email", "github-sync@github.com", false, ["--global"]);
+    await exec.exec("git", [
+      "config",
+      "--global",
+      "user.name",
+      "github-sync-action",
+    ]);
+    await exec.exec("git", [
+      "config",
+      "--global",
+      "user.email",
+      "github-sync@github.com",
+    ]);
     core.info("✓ Git user configured");
   } catch (error) {
     core.warning(`Could not set git config: ${error.message}`);
   }
 }
 
-function prepareUrls(sourceRepo, destinationRepo, destinationToken, sourceToken) {
+function prepareUrls(
+  sourceRepo,
+  destinationRepo,
+  destinationToken,
+  sourceToken,
+) {
   core.info("=== Preparing URLs with Authentication ===");
-  
+
   let srcUrl = sourceRepo;
   let dstUrl = destinationRepo;
 
   if (destinationToken && dstUrl.startsWith("https://")) {
-    dstUrl = dstUrl.replace("https://", `https://x-access-token:${destinationToken}@`);
+    dstUrl = dstUrl.replace(
+      "https://",
+      `https://x-access-token:${destinationToken}@`,
+    );
     core.info("✓ Destination URL prepared with authentication");
-    core.debug(`Destination URL: ${dstUrl.replace(/x-access-token:.*@/, "x-access-token:***@")}`);
+    core.debug(
+      `Destination URL: ${dstUrl.replace(/x-access-token:.*@/, "x-access-token:***@")}`,
+    );
   }
 
   if (sourceToken && srcUrl.startsWith("https://")) {
-    srcUrl = srcUrl.replace("https://", `https://x-access-token:${sourceToken}@`);
+    srcUrl = srcUrl.replace(
+      "https://",
+      `https://x-access-token:${sourceToken}@`,
+    );
     core.info("✓ Source URL prepared with authentication");
-    core.debug(`Source URL: ${srcUrl.replace(/x-access-token:.*@/, "x-access-token:***@")}`);
+    core.debug(
+      `Source URL: ${srcUrl.replace(/x-access-token:.*@/, "x-access-token:***@")}`,
+    );
   } else if (!sourceToken && srcUrl.startsWith("https://")) {
     core.info("ℹ Source repo is public (no token provided)");
   }
@@ -94,108 +121,145 @@ function prepareUrls(sourceRepo, destinationRepo, destinationToken, sourceToken)
   return { srcUrl, dstUrl };
 }
 
-async function cloneDestinationRepo(git, dstUrl) {
+async function cloneDestinationRepo(dstUrl) {
   core.info("=== Cloning Destination Repository ===");
-  core.info(`Cloning: ${dstUrl.replace(/x-access-token:.*@/, "x-access-token:***@")}`);
+  core.info(
+    `Cloning: ${dstUrl.replace(/x-access-token:.*@/, "x-access-token:***@")}`,
+  );
   try {
-    await git.clone(dstUrl, "repo");
+    await exec.exec("git", ["clone", dstUrl, "repo"]);
     core.info("✓ Destination repository cloned successfully");
   } catch (error) {
     core.error(`✗ Clone failed: ${error.message}`);
     throw error;
   }
 
-  const repo = simpleGit("repo");
   core.info("Git repository initialized");
-  return repo;
 }
 
-async function setupSourceRemote(repo, srcUrl) {
+async function setupSourceRemote(srcUrl) {
   core.info("=== Setting up Source Remote ===");
-  const remotes = await repo.getRemotes(true);
-  const sourceRemoteExists = remotes.some((r) => r.name === "source");
+
+  let remotes = "";
+  try {
+    await exec.exec("git", ["remote"], {
+      listeners: {
+        stdout: (data) => {
+          remotes += data.toString();
+        },
+      },
+    });
+  } catch (error) {
+    core.warning("Could not list remotes");
+  }
+
+  const remoteList = remotes.split(/\r?\n/).filter((line) => line.trim());
+  const sourceRemoteExists = remoteList.includes("source");
 
   if (!sourceRemoteExists) {
     core.info("Adding source remote...");
-    await repo.addRemote("source", srcUrl);
+    await exec.exec("git", ["remote", "add", "source", srcUrl]);
     core.info("✓ Source remote added");
   } else {
     core.info("Updating existing source remote...");
-    await repo.removeRemote("source");
-    await repo.addRemote("source", srcUrl);
+    await exec.exec("git", ["remote", "set-url", "source", srcUrl]);
     core.info("✓ Source remote updated");
   }
 
   core.info("Fetching from source...");
-  await repo.fetch("source");
+  await exec.exec("git", ["fetch", "source"]);
   core.info("✓ Fetch from source completed");
 }
 
-
-async function syncBranches(repo, sourceBranch, destinationBranch, syncAllBranches) {
+async function syncBranches(sourceBranch, destinationBranch, syncAllBranches) {
   if (syncAllBranches) {
     core.info("=== Syncing All Branches ===");
-    const branches = await repo.branch(["-r"]);
-    const branchNames = branches.all
-      .filter((b) => b.startsWith("source/") && !b.includes("->"))
-      .map((b) => b.replace("source/", ""));
+
+    let stdout = "";
+    await exec.exec("git", ["branch", "-r"], {
+      listeners: {
+        stdout: (data) => {
+          stdout += data.toString();
+        },
+      },
+    });
+
+    const branchNames = stdout
+      .split(/\r?\n/)
+      .map((line) => line.trim())
+      .filter((line) => line.startsWith("source/") && !line.includes("->"))
+      .map((line) => line.replace("source/", ""));
 
     core.info(`Found ${branchNames.length} branches to sync`);
 
     for (const branch of branchNames) {
       core.info(`Syncing branch: ${branch}`);
-      await repo.push(
+      await exec.exec("git", [
+        "push",
         "origin",
         `refs/remotes/source/${branch}:refs/heads/${branch}`,
-        { "--force": null },
-      );
+        "--force",
+      ]);
       core.info(`✓ Branch synced: ${branch}`);
     }
   } else {
     core.info("=== Syncing Single Branch ===");
     core.info(`Fetching branch: ${sourceBranch}`);
-    await repo.fetch("source", sourceBranch);
+    await exec.exec("git", ["fetch", "source", sourceBranch]);
     core.info(`✓ Fetched: ${sourceBranch}`);
 
     core.info(`Pushing to: ${destinationBranch}`);
-    await repo.push(
+    await exec.exec("git", [
+      "push",
       "origin",
       `refs/remotes/source/${sourceBranch}:refs/heads/${destinationBranch}`,
-      { "--force": null },
-    );
+      "--force",
+    ]);
     core.info(`✓ Pushed to: ${destinationBranch}`);
   }
 }
 
-async function syncTags(repo, syncTags) {
+async function syncTags(syncTags) {
   if (syncTags === "true") {
     core.info("=== Syncing All Tags ===");
     core.info("Fetching tags...");
-    await repo.fetch("source", "--tags");
+    await exec.exec("git", ["fetch", "source", "--tags"]);
     core.info("✓ Tags fetched");
 
     core.info("Pushing tags...");
-    await repo.pushTags("origin", { "--force": null });
+    await exec.exec("git", ["push", "origin", "--tags", "--force"]);
     core.info("✓ Tags pushed");
   } else if (syncTags) {
     core.info("=== Syncing Tags Matching Pattern ===");
     core.info(`Pattern: ${syncTags}`);
 
     core.info("Fetching tags...");
-    await repo.fetch("source", "--tags");
+    await exec.exec("git", ["fetch", "source", "--tags"]);
     core.info("✓ Tags fetched");
 
-    const allTags = await repo.tags();
-    const matchingTags = allTags.all.filter((tag) => tag.match(syncTags));
+    let stdout = "";
+    await exec.exec("git", ["tag"], {
+      listeners: {
+        stdout: (data) => {
+          stdout += data.toString();
+        },
+      },
+    });
+
+    const allTags = stdout.split(/\r?\n/).filter((tag) => tag.trim());
+    const matchingTags = allTags.filter((tag) => tag.match(syncTags));
 
     core.info(`Found ${matchingTags.length} matching tags`);
 
     for (const tag of matchingTags) {
       if (tag) {
         core.info(`Pushing tag: ${tag}`);
-        await repo.push("origin", `refs/tags/${tag}:refs/tags/${tag}`, {
-          "--force": null,
-        });
+        await exec.exec("git", [
+          "push",
+          "origin",
+          `refs/tags/${tag}:refs/tags/${tag}`,
+          "--force",
+        ]);
         core.info(`✓ Tag pushed: ${tag}`);
       }
     }
@@ -203,7 +267,6 @@ async function syncTags(repo, syncTags) {
     core.info("Tag syncing disabled");
   }
 }
-
 
 async function run() {
   try {
@@ -213,9 +276,8 @@ async function run() {
     logInputs(inputs);
 
     const destinationToken = await authenticate(inputs);
-    
-    const git = simpleGit();
-    await setupGitConfig(git);
+
+    await setupGitConfig();
 
     const { srcUrl, dstUrl } = prepareUrls(
       inputs.sourceRepo,
@@ -224,18 +286,18 @@ async function run() {
       inputs.sourceToken,
     );
 
-    const repo = await cloneDestinationRepo(git, dstUrl);
+    await cloneDestinationRepo(dstUrl);
+    process.chdir("repo");
 
-    await setupSourceRemote(repo, srcUrl);
+    await setupSourceRemote(srcUrl);
 
     await syncBranches(
-      repo,
       inputs.sourceBranch,
       inputs.destinationBranch,
       inputs.syncAllBranches,
     );
 
-    await syncTags(repo, inputs.syncTags);
+    await syncTags(inputs.syncTags);
 
     core.info("=== GitHub Sync Completed Successfully ===");
     core.info("Sync complete!");
