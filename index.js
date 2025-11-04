@@ -69,35 +69,15 @@ async function run() {
     // Create git instance
     const git = simpleGit();
     
-    // Configure git user
+    // Configure git user with global flag to avoid writing to repo config
     core.info("Configuring git user...");
-    await git.addConfig("user.name", "github-sync-action");
-    await git.addConfig("user.email", "github-sync@github.com");
-    core.info("Git user configured");
-    
-    // Configure git to not prompt for credentials
-    await git.addConfig("core.askPass", "true");
-    
-    // Use credential helper to store credentials temporarily
-    // This is more reliable than embedding in URL
-    if (destinationToken && dstUrl.startsWith("https://")) {
-      // Parse the URL to get the host
-      try {
-        const urlObj = new URL(dstUrl);
-        const host = urlObj.hostname;
-        
-        // Store credentials in git's credential cache
-        await git.raw([
-          "credential",
-          "approve"
-        ]).then((result) => {
-          // This won't work directly, let's use a different approach
-        }).catch(() => {
-          // Continue even if credential approve fails
-        });
-      } catch (error) {
-        core.debug(`Could not configure credentials: ${error.message}`);
-      }
+    try {
+      await git.addConfig("user.name", "github-sync-action", false, ["--global"]);
+      await git.addConfig("user.email", "github-sync@github.com", false, ["--global"]);
+      core.info("✓ Git user configured");
+    } catch (error) {
+      core.warning(`Could not set git config: ${error.message}`);
+      // Continue anyway, git might work without this
     }
     
     core.info("=== Preparing URLs with Authentication ===");
