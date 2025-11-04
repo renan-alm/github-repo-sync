@@ -3,7 +3,7 @@ name: Deploy to GitHub Container Registry
 on:
   push:
     tags:
-      - '*'
+      - "*"
   workflow_dispatch:
 
 jobs:

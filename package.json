@@ -1,0 +1,32 @@
+{
+  "name": "github-sync",
+  "version": "1.0.0",
+  "description": "A GitHub Action for syncing the current repository with a remote repository",
+  "main": "index.js",
+  "type": "module",
+  "scripts": {
+    "start": "node index.js",
+    "lint": "eslint .",
+    "lint:fix": "eslint . --fix",
+    "format": "prettier --write .",
+    "test": "echo \"Error: no test specified\" && exit 1"
+  },
+  "keywords": [
+    "github",
+    "action",
+    "sync",
+    "git",
+    "repository"
+  ],
+  "author": "Renan Alm <renan-alm@github.com>",
+  "license": "MIT",
+  "dependencies": {},
+  "devDependencies": {
+    "eslint": "^8.54.0",
+    "eslint-config-prettier": "^9.0.0",
+    "prettier": "^3.1.0"
+  },
+  "engines": {
+    "node": ">=20.0.0"
+  }
+}
