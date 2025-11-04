@@ -105,17 +105,22 @@ function prepareUrls(
     );
   }
 
-  if (sourceToken && srcUrl.startsWith("https://")) {
+  // Use sourceToken if provided, otherwise fall back to destinationToken for source
+  const effectiveSourceToken = sourceToken || destinationToken;
+  
+  if (effectiveSourceToken && srcUrl.startsWith("https://")) {
     srcUrl = srcUrl.replace(
       "https://",
-      `https://x-access-token:${sourceToken}@`,
+      `https://x-access-token:${effectiveSourceToken}@`,
     );
-    core.info("✓ Source URL prepared with authentication");
+    if (sourceToken) {
+      core.info("✓ Source URL prepared with explicit token");
+    } else {
+      core.info("✓ Source URL prepared with destination token");
+    }
     core.debug(
       `Source URL: ${srcUrl.replace(/x-access-token:.*@/, "x-access-token:***@")}`,
     );
-  } else if (!sourceToken && srcUrl.startsWith("https://")) {
-    core.info("ℹ Source repo is public (no token provided)");
   }
 
   return { srcUrl, dstUrl };
