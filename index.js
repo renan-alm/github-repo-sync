@@ -58,11 +58,6 @@ async function run() {
 
     // Always perform a fresh clone of the destination repo
     core.info("Cloning destination repo...");
-    const git = simpleGit();
-    
-    // Configure git user
-    await git.addConfig("user.name", "github-sync-action");
-    await git.addConfig("user.email", "github-sync@github.com");
     
     // Handle credentials only for HTTPS URLs
     // Pass tokens via environment variables for better compatibility across different SCM providers
@@ -102,14 +97,22 @@ async function run() {
       }
     }
     
-    // Clone with appropriate environment
-    const gitOptions = destinationToken && dstUrl.startsWith("https://") 
-      ? { env: gitEnv }
-      : {};
+    // Create git instance with environment variables
+    const git = simpleGit({
+      env: gitEnv,
+    });
     
-    await git.clone(dstUrl, "repo", gitOptions);
+    // Configure git user
+    await git.addConfig("user.name", "github-sync-action");
+    await git.addConfig("user.email", "github-sync@github.com");
+    
+    // Clone destination repo
+    await git.clone(dstUrl, "repo");
 
-    const repo = simpleGit("repo", gitOptions);
+    // Use same environment for repo operations
+    const repo = simpleGit("repo", {
+      env: gitEnv,
+    });
 
     // Add source as remote (if not already)
     const remotes = await repo.getRemotes(true);
