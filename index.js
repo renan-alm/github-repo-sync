@@ -59,60 +59,48 @@ async function run() {
     // Always perform a fresh clone of the destination repo
     core.info("Cloning destination repo...");
     
-    // Handle credentials only for HTTPS URLs
-    // Pass tokens via environment variables for better compatibility across different SCM providers
-    const gitEnv = { ...process.env };
-    
-    if (destinationToken && dstUrl.startsWith("https://")) {
-      // Set GIT_ASKPASS to handle HTTPS authentication without interactive prompt
-      gitEnv.GIT_ASKPASS = "echo";
-      gitEnv.GIT_ASKPASS_REQUIRE = "force";
-      // Try both common patterns for token-based auth
-      gitEnv.GIT_PASSWORD = destinationToken;
-      
-      // Also try embedding in URL as fallback for HTTPS
-      try {
-        const destUrl = new URL(dstUrl);
-        destUrl.username = "x-access-token";
-        destUrl.password = destinationToken;
-        dstUrl = destUrl.toString();
-      } catch (error) {
-        core.debug(`Could not parse destination URL: ${error.message}`);
-      }
-    }
-    
-    if (sourceToken && srcUrl.startsWith("https://")) {
-      // Set environment for source repo if it needs different credentials
-      if (sourceToken !== destinationToken) {
-        gitEnv.GIT_PASSWORD = sourceToken;
-      }
-      
-      try {
-        const srcUrlObj = new URL(srcUrl);
-        srcUrlObj.username = "x-access-token";
-        srcUrlObj.password = sourceToken;
-        srcUrl = srcUrlObj.toString();
-      } catch (error) {
-        core.debug(`Could not parse source URL: ${error.message}`);
-      }
-    }
-    
-    // Create git instance with environment variables
-    const git = simpleGit({
-      env: gitEnv,
-    });
+    // Create git instance - don't pass env here, we'll use it differently
+    const git = simpleGit();
     
     // Configure git user
     await git.addConfig("user.name", "github-sync-action");
     await git.addConfig("user.email", "github-sync@github.com");
     
+    // Disable interactive prompts for HTTPS operations
+    await git.addConfig("core.askPass", "echo");
+    await git.addConfig("GIT_TERMINAL_PROMPT", "0");
+    
+    // Handle credentials by embedding in URLs for HTTPS
+    // This is more reliable than environment variables with simple-git
+    if (destinationToken && dstUrl.startsWith("https://")) {
+      try {
+        const destUrl = new URL(dstUrl);
+        destUrl.username = "x-access-token";
+        destUrl.password = destinationToken;
+        dstUrl = destUrl.toString();
+        core.debug("Embedded credentials in destination URL");
+      } catch (error) {
+        core.warning(`Could not parse destination URL: ${error.message}`);
+      }
+    }
+    
+    if (sourceToken && srcUrl.startsWith("https://")) {
+      try {
+        const srcUrlObj = new URL(srcUrl);
+        srcUrlObj.username = "x-access-token";
+        srcUrlObj.password = sourceToken;
+        srcUrl = srcUrlObj.toString();
+        core.debug("Embedded credentials in source URL");
+      } catch (error) {
+        core.warning(`Could not parse source URL: ${error.message}`);
+      }
+    }
+    
     // Clone destination repo
+    core.info(`Cloning: ${dstUrl.replace(/x-access-token:.*@/, "x-access-token:***@")}`);
     await git.clone(dstUrl, "repo");
 
-    // Use same environment for repo operations
-    const repo = simpleGit("repo", {
-      env: gitEnv,
-    });
+    const repo = simpleGit("repo");
 
     // Add source as remote (if not already)
     const remotes = await repo.getRemotes(true);
