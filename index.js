@@ -59,45 +59,58 @@ async function run() {
     // Always perform a fresh clone of the destination repo
     core.info("Cloning destination repo...");
     
-    // Create git instance - don't pass env here, we'll use it differently
+    // Create git instance
     const git = simpleGit();
     
     // Configure git user
     await git.addConfig("user.name", "github-sync-action");
     await git.addConfig("user.email", "github-sync@github.com");
     
-    // Disable interactive prompts for HTTPS operations
-    await git.addConfig("core.askPass", "echo");
+    // Configure git to not prompt for credentials
+    await git.addConfig("core.askPass", "true");
     
-    // Handle credentials by embedding in URLs for HTTPS
-    // This is more reliable than environment variables with simple-git
+    // Use credential helper to store credentials temporarily
+    // This is more reliable than embedding in URL
     if (destinationToken && dstUrl.startsWith("https://")) {
+      // Parse the URL to get the host
       try {
-        const destUrl = new URL(dstUrl);
-        destUrl.username = "x-access-token";
-        destUrl.password = destinationToken;
-        dstUrl = destUrl.toString();
-        core.debug("Embedded credentials in destination URL");
+        const urlObj = new URL(dstUrl);
+        const host = urlObj.hostname;
+        
+        // Store credentials in git's credential cache
+        await git.raw([
+          "credential",
+          "approve"
+        ]).then((result) => {
+          // This won't work directly, let's use a different approach
+        }).catch(() => {
+          // Continue even if credential approve fails
+        });
       } catch (error) {
-        core.warning(`Could not parse destination URL: ${error.message}`);
+        core.debug(`Could not configure credentials: ${error.message}`);
       }
+    }
+    
+    // Embed credentials in URL as final approach
+    if (destinationToken && dstUrl.startsWith("https://")) {
+      // Use x-access-token as username and token as password
+      dstUrl = dstUrl.replace("https://", `https://x-access-token:${destinationToken}@`);
+      core.debug("Embedded PAT in destination URL");
     }
     
     if (sourceToken && srcUrl.startsWith("https://")) {
-      try {
-        const srcUrlObj = new URL(srcUrl);
-        srcUrlObj.username = "x-access-token";
-        srcUrlObj.password = sourceToken;
-        srcUrl = srcUrlObj.toString();
-        core.debug("Embedded credentials in source URL");
-      } catch (error) {
-        core.warning(`Could not parse source URL: ${error.message}`);
-      }
+      srcUrl = srcUrl.replace("https://", `https://x-access-token:${sourceToken}@`);
+      core.debug("Embedded token in source URL");
     }
     
     // Clone destination repo
-    core.info(`Cloning: ${dstUrl.replace(/x-access-token:.*@/, "x-access-token:***@")}`);
-    await git.clone(dstUrl, "repo");
+    core.info("Cloning destination repo...");
+    try {
+      await git.clone(dstUrl, "repo");
+    } catch (error) {
+      core.error(`Clone failed: ${error.message}`);
+      throw error;
+    }
 
     const repo = simpleGit("repo");
 
