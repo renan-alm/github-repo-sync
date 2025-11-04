@@ -1,5 +1,5 @@
 {
-  "name": "github-sync",
+  "name": "github-repo-sync",
   "version": "1.0.0",
   "description": "A GitHub Action for syncing the current repository with a remote repository",
   "main": "index.js",

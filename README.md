@@ -1,4 +1,4 @@
-# GitHub Sync
+# GitHub Repo Sync
 
 A GitHub Action for syncing repositories across different SCM providers using **force push**. Supports GitHub, GitLab, Gitea, and other Git-based platforms.
 
@@ -62,7 +62,7 @@ jobs:
         with:
           persist-credentials: false
       - name: repo-sync
-        uses: repo-sync/github-sync@v2
+        uses: renan-alm/github-repo-sync@v2
         with:
           source_repo: "https://github.com/owner/source-repo.git"
           source_branch: "main"
@@ -191,7 +191,7 @@ This will force sync ALL branches to match the source repo. Branches created onl
 ### Example 1: Sync specific branch with PAT (default fallback enabled)
 
 ```yaml
-- uses: renan-alm/github-sync@simple
+- uses: renan-alm/github-repo-sync@simple
   with:
     source_repo: "https://github.com/org/upstream-repo.git"
     source_branch: "main"
@@ -206,7 +206,7 @@ If `main` doesn't exist in source, automatically falls back to `master`.
 ### Example 2: Sync all branches with GitHub App
 
 ```yaml
-- uses: renan-alm/github-sync@simple
+- uses: renan-alm/github-repo-sync@simple
   with:
     source_repo: "https://github.com/org/upstream-repo.git"
     destination_repo: "https://github.com/org/mirror-repo.git"
@@ -217,10 +217,10 @@ If `main` doesn't exist in source, automatically falls back to `master`.
     github_app_installation_id: ${{ secrets.GITHUB_APP_INSTALLATION_ID }}
 ```
 
-### Example 3: Sync tags matching a pattern
+### Example 3: Sync tags matching a regex pattern
 
 ```yaml
-- uses: renan-alm/github-sync@simple
+- uses: renan-alm/github-repo-sync@simple
   with:
     source_repo: "https://github.com/org/upstream-repo.git"
     source_branch: "main"
@@ -230,10 +230,10 @@ If `main` doesn't exist in source, automatically falls back to `master`.
     github_token: ${{ secrets.PAT }}
 ```
 
-### Example 4: Strict branch matching (no fallback)
+### Example 4: Strict branch matching without fallback
 
 ```yaml
-- uses: renan-alm/github-sync@simple
+- uses: renan-alm/github-repo-sync@simple
   with:
     source_repo: "https://github.com/org/upstream-repo.git"
     source_branch: "develop"
@@ -246,7 +246,7 @@ If `main` doesn't exist in source, automatically falls back to `master`.
 ### Example 5: Cross-platform sync (GitHub to GitLab)
 
 ```yaml
-- uses: renan-alm/github-sync@simple
+- uses: renan-alm/github-repo-sync@simple
   with:
     source_repo: "https://github.com/org/github-repo.git"
     source_branch: "main"

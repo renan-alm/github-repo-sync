@@ -1,6 +1,6 @@
 name: GitHub Repo Sync
 author: Renan Alm <renan-alm@github.com>
-description: ⤵️ Sync current repository with remote
+description: ⤵️ Sync repository with remote
 branding:
   icon: "git-branch"
   color: "gray-dark"
