@@ -137,7 +137,7 @@ To disable this behavior and require exact branch matching, set `use_main_as_fal
 ```yaml
 with:
   source_branch: "main"
-  use_main_as_fallback: false  # Fail if exact branch not found
+  use_main_as_fallback: false # Fail if exact branch not found
 ```
 
 #### Workflow File Location
@@ -226,7 +226,7 @@ If `main` doesn't exist in source, automatically falls back to `master`.
     source_branch: "main"
     destination_repo: "https://github.com/org/mirror-repo.git"
     destination_branch: "main"
-    sync_tags: "^v[0-9]+\\.[0-9]+\\.[0-9]+$"  # Only version tags like v1.0.0
+    sync_tags: "^v[0-9]+\\.[0-9]+\\.[0-9]+$" # Only version tags like v1.0.0
     github_token: ${{ secrets.PAT }}
 ```
 
@@ -239,7 +239,7 @@ If `main` doesn't exist in source, automatically falls back to `master`.
     source_branch: "develop"
     destination_repo: "https://github.com/org/mirror-repo.git"
     destination_branch: "develop"
-    use_main_as_fallback: "false"  # Fail if 'develop' doesn't exist
+    use_main_as_fallback: "false" # Fail if 'develop' doesn't exist
     github_token: ${{ secrets.PAT }}
 ```
 
