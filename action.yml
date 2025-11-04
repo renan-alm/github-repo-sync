@@ -2,8 +2,8 @@ name: GitHub Repo Sync
 author: Wei He <github@weispot.com>
 description: ⤵️ Sync current repository with remote
 branding:
-  icon: 'git-branch'
-  color: 'gray-dark'
+  icon: "git-branch"
+  color: "gray-dark"
 inputs:
   source_repo:
     description: GitHub public repo slug or full https clone url (with access_token if needed)
@@ -21,8 +21,8 @@ inputs:
     description: Should tags also be synced
     required: false
 runs:
-  using: 'docker'
-  image: docker://ghcr.io/repo-sync/github-sync:v2.3.0
+  using: "node20"
+  main: "index.js"
   env:
     GITHUB_TOKEN: ${{ inputs.github_token }}
     SYNC_TAGS: ${{ inputs.sync_tags }}
