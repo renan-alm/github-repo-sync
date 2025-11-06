@@ -8,6 +8,10 @@ import {
   logGerritInfo,
 } from "./gerrit.js";
 import {
+  validateAuthentication,
+  logValidationResult,
+} from "./auth-validation.js";
+import {
   readSSHInputs,
   isSSHUrl,
   detectAuthenticationMethods,
@@ -401,6 +405,16 @@ async function run() {
 
     const inputs = readInputs();
     logInputs(inputs);
+
+    // Validate authentication configuration early
+    const authValidation = validateAuthentication(inputs);
+    if (!authValidation.isValid) {
+      logValidationResult(authValidation);
+      throw new Error("Authentication configuration is invalid. See errors above.");
+    }
+    if (authValidation.warnings.length > 0) {
+      logValidationResult(authValidation);
+    }
 
     // Setup SSH authentication if needed
     const authMethods = detectAuthenticationMethods(inputs.sourceRepo, inputs.destinationRepo);
