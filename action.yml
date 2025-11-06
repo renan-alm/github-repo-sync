@@ -41,6 +41,21 @@ inputs:
   github_token:
     description: GitHub Personal Access Token (required if not using GitHub App)
     required: false
+  ssh_key:
+    description: SSH private key content for SSH-based authentication. Can be raw key, escaped key (\\n), or base64 encoded
+    required: false
+  ssh_key_path:
+    description: Path to SSH private key file (alternative to ssh_key)
+    required: false
+  ssh_passphrase:
+    description: Passphrase for encrypted SSH private key
+    required: false
+  ssh_known_hosts_path:
+    description: Path to custom SSH known_hosts file
+    required: false
+  ssh_strict_host_key_checking:
+    description: Enable strict SSH host key checking (default true)
+    required: false
 runs:
   using: "node20"
   main: "dist/index.js"

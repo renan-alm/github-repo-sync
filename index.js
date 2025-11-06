@@ -7,6 +7,12 @@ import {
   syncTagsGerrit,
   logGerritInfo,
 } from "./gerrit.js";
+import {
+  readSSHInputs,
+  isSSHUrl,
+  detectAuthenticationMethods,
+  setupSSHAuthentication,
+} from "./ssh-auth.js";
 
 async function getAppInstallationToken(appId, privateKey, installationId) {
   const auth = createAppAuth({
@@ -32,6 +38,12 @@ function readInputs() {
     githubAppPrivateKey: core.getInput("github_app_private_key"),
     githubAppInstallationId: core.getInput("github_app_installation_id"),
     githubToken: core.getInput("github_token"),
+    // SSH inputs
+    sshKey: core.getInput("ssh_key"),
+    sshKeyPath: core.getInput("ssh_key_path"),
+    sshPassphrase: core.getInput("ssh_passphrase"),
+    sshKnownHostsPath: core.getInput("ssh_known_hosts_path"),
+    sshStrictHostKeyChecking: core.getInput("ssh_strict_host_key_checking") !== "false",
   };
 }
 
@@ -45,8 +57,19 @@ function logInputs(inputs) {
 }
 
 async function authenticate(inputs) {
+  // Check if using SSH authentication
+  const authMethods = detectAuthenticationMethods(inputs.sourceRepo, inputs.destinationRepo);
+
+  if (authMethods.needsSSH) {
+    core.info("SSH authentication detected for one or more repositories");
+    // For SSH, token-based auth is not needed; return null
+    // SSH agent will handle authentication
+    return null;
+  }
+
+  // Token-based authentication (HTTPS)
   if (inputs.githubToken) {
-    core.info("Using GitHub Personal Access Token for authentication...");
+    core.info("Using GitHub Personal Access Token for HTTPS authentication...");
     return inputs.githubToken;
   } else if (
     inputs.githubAppId &&
@@ -63,7 +86,7 @@ async function authenticate(inputs) {
     return token;
   } else {
     throw new Error(
-      "Either github_token (PAT) or github_app credentials (app_id, private_key, installation_id) must be provided",
+      "Authentication required: Either github_token (PAT), github_app credentials, or ssh_key must be provided",
     );
   }
 }
@@ -101,15 +124,18 @@ function prepareUrls(
   let srcUrl = sourceRepo;
   let dstUrl = destinationRepo;
 
+  // Only embed tokens for HTTPS URLs; SSH URLs will use SSH agent
   if (destinationToken && dstUrl.startsWith("https://")) {
     dstUrl = dstUrl.replace(
       "https://",
       `https://x-access-token:${destinationToken}@`,
     );
-    core.info("✓ Destination URL prepared with authentication");
+    core.info("✓ Destination URL prepared with HTTPS token authentication");
     core.debug(
       `Destination URL: ${dstUrl.replace(/x-access-token:.*@/, "x-access-token:***@")}`,
     );
+  } else if (isSSHUrl(dstUrl)) {
+    core.info("✓ Destination URL is SSH-based, will use SSH agent authentication");
   }
 
   // Use sourceToken if provided, otherwise fall back to destinationToken for source
@@ -128,6 +154,8 @@ function prepareUrls(
     core.debug(
       `Source URL: ${srcUrl.replace(/x-access-token:.*@/, "x-access-token:***@")}`,
     );
+  } else if (isSSHUrl(srcUrl)) {
+    core.info("✓ Source URL is SSH-based, will use SSH agent authentication");
   }
 
   return { srcUrl, dstUrl };
@@ -373,6 +401,19 @@ async function run() {
 
     const inputs = readInputs();
     logInputs(inputs);
+
+    // Setup SSH authentication if needed
+    const authMethods = detectAuthenticationMethods(inputs.sourceRepo, inputs.destinationRepo);
+    if (authMethods.needsSSH) {
+      const sshConfig = {
+        sshKey: inputs.sshKey,
+        sshKeyPath: inputs.sshKeyPath,
+        sshPassphrase: inputs.sshPassphrase,
+        sshKnownHostsPath: inputs.sshKnownHostsPath,
+        sshStrictHostKeyChecking: inputs.sshStrictHostKeyChecking,
+      };
+      await setupSSHAuthentication(sshConfig);
+    }
 
     // Detect if destination is Gerrit
     const isDestinationGerrit = isGerritRepository(inputs.destinationRepo);

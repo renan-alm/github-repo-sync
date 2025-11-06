@@ -44,6 +44,60 @@ You can authenticate using either:
 - Get your GitHub App ID, private key, and installation ID
 - Add these as repository secrets
 
+#### Option 3: SSH (For private/self-hosted repositories)
+
+- Generate an SSH key pair
+- Add the public key to your Git host
+- Add the private key as a repository secret
+- Use SSH URLs in your workflow
+
+### SSH Authentication - Key Features
+
+#### 1. Multiple SSH Key Input Methods
+
+```yaml
+# Method 1: Direct SSH key from secret
+ssh_key: ${{ secrets.SSH_KEY }}
+
+# Method 2: SSH key file path
+ssh_key_path: /home/runner/.ssh/id_rsa
+
+# Method 3: Encrypted SSH key with passphrase
+ssh_key: ${{ secrets.SSH_KEY }}
+ssh_passphrase: ${{ secrets.SSH_PASSPHRASE }}
+```
+
+#### 2. Flexible Key Format Support
+
+- **Raw OpenSSH private key** (with BEGIN/END markers)
+- **Escaped newlines** (\\n) from GitHub Secrets
+- **Base64 encoded** (automatically decoded)
+
+#### 3. Automatic SSH Configuration
+
+- Pre-configured for GitHub, GitLab, Gitea, Gerrit
+- Prevents host verification prompts
+- Fallback config for custom hosts
+
+#### 4. URL-Based Authentication Detection
+
+```javascript
+// Automatically detects and routes:
+git@github.com:owner/repo.git      → SSH Agent
+https://github.com/owner/repo.git  → Token Auth
+ssh://gerrit.com/repo              → SSH Agent
+```
+
+#### 5. Mixed Authentication Support
+
+```yaml
+# Can use both SSH and HTTPS in same sync
+source_repo: "https://github.com/public/repo.git"      # HTTPS
+destination_repo: "git@internal-git.com:repo.git"      # SSH
+github_token: ${{ secrets.GITHUB_TOKEN }}              # For HTTPS
+ssh_key: ${{ secrets.SSH_KEY }}                        # For SSH
+```
+
 ### GitHub Actions - Using PAT
 
 ```yaml
@@ -254,4 +308,66 @@ If `main` doesn't exist in source, automatically falls back to `master`.
     destination_repo: "https://gitlab.com/org/gitlab-repo.git"
     destination_branch: "main"
     github_token: ${{ secrets.GITLAB_TOKEN }}
+```
+
+### Example 6: SSH with Single Host
+
+```yaml
+name: Sync with SSH
+
+on:
+  schedule:
+    - cron: "0 * * * *"
+
+jobs:
+  sync:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: renan-alm/github-repo-sync@v2
+        with:
+          source_repo: "git@github.com:upstream/repo.git"
+          source_branch: "main"
+          destination_repo: "git@github.com:mirror/repo.git"
+          destination_branch: "main"
+          sync_tags: "true"
+          ssh_key: ${{ secrets.SSH_KEY }}
+```
+
+### Example 7: SSH with Multiple Hosts
+
+```yaml
+- uses: renan-alm/github-repo-sync@v2
+  with:
+    source_repo: "git@gitlab.com:org/source-repo.git"
+    source_branch: "develop"
+    destination_repo: "git@gerrit.company.com:destination-repo.git"
+    destination_branch: "develop"
+    ssh_key: ${{ secrets.SSH_KEY }}
+```
+
+### Example 8: Mixed HTTPS and SSH
+
+```yaml
+# Use HTTPS for source, SSH for destination
+- uses: renan-alm/github-repo-sync@v2
+  with:
+    source_repo: "https://github.com/public/repo.git"
+    source_branch: "main"
+    destination_repo: "git@internal-git.company.com:repo.git"
+    destination_branch: "main"
+    github_token: ${{ secrets.GITHUB_TOKEN }}
+    ssh_key: ${{ secrets.SSH_KEY }}
+```
+
+### Example 9: SSH with Encrypted Key
+
+```yaml
+- uses: renan-alm/github-repo-sync@v2
+  with:
+    source_repo: "git@github.com:owner/source.git"
+    source_branch: "main"
+    destination_repo: "git@github.com:owner/destination.git"
+    destination_branch: "main"
+    ssh_key: ${{ secrets.SSH_KEY }}
+    ssh_passphrase: ${{ secrets.SSH_PASSPHRASE }}
 ```
