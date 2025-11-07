@@ -42755,10 +42755,49 @@ async function syncBranches(
   if (syncAllBranches) {
     lib_core.info("=== Syncing All Branches ===");
 
-    const branchNames = await getSourceBranches();
-    lib_core.info(`Found ${branchNames.length} branches to sync`);
+    const sourceBranchNames = await getSourceBranches();
+    lib_core.info(`Found ${sourceBranchNames.length} branches in source to sync`);
 
-    for (const branch of branchNames) {
+    // Get all destination branches (excluding HEAD)
+    let stdout = "";
+    await lib_exec.exec("git", ["branch", "-r"], {
+      listeners: {
+        stdout: (data) => {
+          stdout += data.toString();
+        },
+      },
+    });
+
+    const destinationBranches = stdout
+      .split(/\r?\n/)
+      .map((line) => line.trim())
+      .filter((line) => line && !line.includes("HEAD") && line.startsWith("origin/"))
+      .map((line) => line.replace("origin/", ""));
+
+    lib_core.info(`Found ${destinationBranches.length} branches in destination`);
+
+    // Delete destination branches that don't exist in source
+    const branchesToDelete = destinationBranches.filter(
+      (branch) => !sourceBranchNames.includes(branch),
+    );
+
+    if (branchesToDelete.length > 0) {
+      lib_core.info(`Deleting ${branchesToDelete.length} destination-only branches...`);
+      for (const branch of branchesToDelete) {
+        try {
+          lib_core.info(`Deleting branch: ${branch}`);
+          await lib_exec.exec("git", ["push", "origin", `--delete`, branch]);
+          lib_core.info(`✓ Branch deleted: ${branch}`);
+        } catch (error) {
+          lib_core.warning(`Could not delete branch ${branch}: ${error.message}`);
+        }
+      }
+    } else {
+      lib_core.info("No destination-only branches to delete");
+    }
+
+    // Push all source branches to destination
+    for (const branch of sourceBranchNames) {
       lib_core.info(`Syncing branch: ${branch}`);
       await lib_exec.exec("git", [
         "push",
