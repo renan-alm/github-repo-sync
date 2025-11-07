@@ -52,6 +52,25 @@ function readInputs() {
   };
 }
 
+/**
+ * Extract hostname from SSH URL
+ * Supports: git@github.com:user/repo.git or ssh://github.com/user/repo.git
+ */
+function extractSSHHostname(url) {
+  if (!url) return null;
+  
+  if (url.startsWith("git@")) {
+    // Format: git@github.com:user/repo.git
+    const match = url.match(/git@([^:]+):/);
+    return match ? match[1] : null;
+  } else if (url.startsWith("ssh://")) {
+    // Format: ssh://github.com/user/repo.git
+    const match = url.match(/ssh:\/\/([^/]+)\//);
+    return match ? match[1] : null;
+  }
+  return null;
+}
+
 function logInputs(inputs) {
   core.info(`Source: ${inputs.sourceRepo} (branch: ${inputs.sourceBranch})`);
   core.info(
@@ -432,7 +451,23 @@ async function run() {
         sshKnownHostsPath: inputs.sshKnownHostsPath,
         sshStrictHostKeyChecking: inputs.sshStrictHostKeyChecking,
       };
-      await setupSSHAuthentication(sshConfig);
+      
+      // Collect SSH hosts to validate
+      const hostsToValidate = [];
+      if (authMethods.sourceIsSSH) {
+        const sourceHost = extractSSHHostname(inputs.sourceRepo);
+        if (sourceHost) hostsToValidate.push(sourceHost);
+      }
+      if (authMethods.destinationIsSSH) {
+        const destHost = extractSSHHostname(inputs.destinationRepo);
+        if (destHost) hostsToValidate.push(destHost);
+      }
+      // Fallback to github.com if no SSH hosts found (shouldn't happen, but defensive)
+      if (hostsToValidate.length === 0) {
+        hostsToValidate.push("github.com");
+      }
+      
+      await setupSSHAuthentication(sshConfig, hostsToValidate);
     }
 
     // Detect if destination is Gerrit

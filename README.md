@@ -73,7 +73,28 @@ ssh_passphrase: ${{ secrets.SSH_PASSPHRASE }}
 - **Escaped newlines** (\\n) from GitHub Secrets
 - **Base64 encoded** (automatically decoded)
 
-#### 3. Automatic SSH Configuration
+#### 3. Host Key Management
+
+The action includes pre-configured host keys for GitHub, GitLab, and other common platforms. For custom or self-hosted servers, use `ssh_known_hosts_path` to add additional host keys:
+
+```yaml
+# Option A: Provide multi-line host key content
+ssh_known_hosts_path: |
+  gitlab.com ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIIpQnkbO+SD6nENKm1BvFp0K1QmVKqQELKsEKnnxKQS1
+  gerrit.company.com ssh-rsa AAAAB3NzaC1yc2EAAAADAQABAAAB...
+
+# Option B: Use an existing known_hosts file
+ssh_known_hosts_path: /path/to/known_hosts
+```
+
+To get host keys for your servers:
+
+```bash
+ssh-keyscan gitlab.com
+ssh-keyscan gerrit.company.com
+```
+
+#### 4. Automatic SSH Configuration
 
 - Pre-configured for GitHub, GitLab, Gitea, Gerrit
 - Prevents host verification prompts
@@ -340,7 +361,7 @@ jobs:
           ssh_key: ${{ secrets.SSH_KEY }}
 ```
 
-### Example 7: SSH with Multiple Hosts
+### Example 7: SSH with Multiple Hosts and Custom Known Hosts
 
 ```yaml
 - uses: renan-alm/github-repo-sync@v2
@@ -350,6 +371,9 @@ jobs:
     destination_repo: "git@gerrit.company.com:destination-repo.git"
     destination_branch: "develop"
     ssh_key: ${{ secrets.SSH_KEY }}
+    ssh_known_hosts_path: |
+      gitlab.com ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIIpQnkbO+SD6nENKm1BvFp0K1QmVKqQELKsEKnnxKQS1
+      gerrit.company.com ssh-rsa AAAAB3NzaC1yc2EAAAADAQABAAAB...
 ```
 
 ### Example 8: Mixed HTTPS and SSH
@@ -409,6 +433,3 @@ Sync from one platform with one token to another platform with a different token
 - Cross-tenant or cross-account synchronization
 
 ⚠️ **Note**: When using `source_token` and `destination_token`, provide both or provide neither. Mix `source_token`/`destination_token` with `github_token` is not supported.
-
-````
-```

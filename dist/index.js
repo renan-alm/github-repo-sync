@@ -42234,15 +42234,15 @@ Host *
 /**
  * Setup known hosts to avoid SSH prompts
  * @param {string} sshDir - SSH directory path
- * @param {string} customKnownHostsPath - Optional custom known_hosts file path
+ * @param {string} customKnownHostsPathOrContent - Optional custom known_hosts file path or host keys content
  */
-async function setupKnownHosts(sshDir, customKnownHostsPath) {
-  const knownHostsPath = customKnownHostsPath || external_path_.join(sshDir, "known_hosts");
+async function setupKnownHosts(sshDir, customKnownHostsPathOrContent) {
+  const knownHostsPath = external_path_.join(sshDir, "known_hosts");
 
   lib_core.info("Setting up known_hosts...");
 
-  // Common host keys
-  const knownHosts = [
+  // Common default host keys
+  const defaultKnownHosts = [
     'github.com ssh-rsa AAAAB3NzaC1yc2EAAAADAQABAAABgQCj7ndgoebf+alrspvfHZEfEIiu1cOyT16CPrMdLvzexPn0DblIWXKc8NyVN++5c2lNB6+7aMg6i6RQaKL8IrKGcorfzi7EC4Jq9Nkz0f+5dn0AHqTJl1lUqhVl3xGrT+rwG88qtqqIvzlWPPC2bRDe7XSGIYvHbFqwCRuPvz0XZ2xZ5g+v96SxQ8wtLn0=',
     'github.com ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIOMqqnkVzrm0SdG6UOoqKLsabgH5C9okWi0dh2l9GKJl',
     'github.com ecdsa-sha2-nistp256 AAAAE2VjZHNhLXNoYTItbmlzdHAyNTYAAAAIbmlzdHAyNTYAAABBBEmKSENjQwcKllNydjgE8Z7mRFot2+kT7nWrniA9n+vj/weIonvg7E2nw8XByT31PdhznVA8phxWtNGgd+hF5Q4=',
@@ -42251,15 +42251,39 @@ async function setupKnownHosts(sshDir, customKnownHostsPath) {
   ];
 
   try {
-    if (external_fs_.existsSync(knownHostsPath)) {
-      lib_core.debug("known_hosts already exists");
-    } else {
-      lib_core.info("Creating known_hosts file...");
-      external_fs_.writeFileSync(knownHostsPath, knownHosts.join("\n") + "\n", {
-        mode: 0o600,
-      });
-      lib_core.info("✓ known_hosts file created");
+    let hostKeysContent = defaultKnownHosts.join("\n");
+
+    // If custom known hosts content is provided, append it
+    if (customKnownHostsPathOrContent) {
+      // Check if it looks like a file path (contains '/' or is absolute)
+      const isFilePath = customKnownHostsPathOrContent.includes("/") || 
+                         customKnownHostsPathOrContent.startsWith("~");
+
+      if (isFilePath) {
+        // It's a file path - read from it
+        const expandedPath = customKnownHostsPathOrContent.startsWith("~") 
+          ? customKnownHostsPathOrContent.replace("~", external_os_.homedir())
+          : customKnownHostsPathOrContent;
+        
+        if (external_fs_.existsSync(expandedPath)) {
+          const customContent = external_fs_.readFileSync(expandedPath, "utf-8");
+          hostKeysContent += "\n" + customContent;
+          lib_core.debug(`Added custom known_hosts from file: ${expandedPath}`);
+        } else {
+          lib_core.warning(`Custom known_hosts file not found: ${expandedPath}`);
+        }
+      } else {
+        // It's content - treat as host keys (multi-line string)
+        hostKeysContent += "\n" + customKnownHostsPathOrContent;
+        lib_core.debug("Added custom known_hosts content from input");
+      }
     }
+
+    lib_core.info("Creating known_hosts file...");
+    external_fs_.writeFileSync(knownHostsPath, hostKeysContent + "\n", {
+      mode: 0o600,
+    });
+    lib_core.info("✓ known_hosts file created");
   } catch (error) {
     lib_core.warning(`Could not setup known_hosts: ${error.message}`);
   }
@@ -42365,8 +42389,9 @@ async function validateSSHSetup(host = "github.com") {
  * @param {string} sshConfig.sshPassphrase - Passphrase for encrypted keys
  * @param {string} sshConfig.sshKnownHostsPath - Custom known_hosts path
  * @param {boolean} sshConfig.sshStrictHostKeyChecking - Enable strict host key checking
+ * @param {Array<string>} hostsToValidate - Optional SSH hosts to validate (will use first available)
  */
-async function setupSSHAuthentication(sshConfig) {
+async function setupSSHAuthentication(sshConfig, hostsToValidate = ["github.com"]) {
   // If no SSH key provided, assume SSH is already configured on runner
   if (!sshConfig.sshKey && !sshConfig.sshKeyPath) {
     lib_core.info("No SSH key provided, assuming SSH is already configured");
@@ -42400,8 +42425,16 @@ async function setupSSHAuthentication(sshConfig) {
     // Start SSH agent and load key
     await startSSHAgent(keyPath, sshConfig.sshPassphrase);
 
-    // Validate SSH setup
-    await validateSSHSetup("github.com");
+    // Validate SSH setup with all provided hosts
+    // Fail if ANY host fails validation
+    const validationResults = [];
+    for (const host of hostsToValidate) {
+      const isValid = await validateSSHSetup(host);
+      validationResults.push({ host, isValid });
+      if (!isValid) {
+        throw new Error(`SSH validation failed for host: ${host}`);
+      }
+    }
 
     lib_core.info("✓ SSH authentication setup completed successfully");
   } catch (error) {
@@ -42450,6 +42483,25 @@ function readInputs() {
     sshKnownHostsPath: lib_core.getInput("ssh_known_hosts_path"),
     sshStrictHostKeyChecking: lib_core.getInput("ssh_strict_host_key_checking") !== "false",
   };
+}
+
+/**
+ * Extract hostname from SSH URL
+ * Supports: git@github.com:user/repo.git or ssh://github.com/user/repo.git
+ */
+function extractSSHHostname(url) {
+  if (!url) return null;
+  
+  if (url.startsWith("git@")) {
+    // Format: git@github.com:user/repo.git
+    const match = url.match(/git@([^:]+):/);
+    return match ? match[1] : null;
+  } else if (url.startsWith("ssh://")) {
+    // Format: ssh://github.com/user/repo.git
+    const match = url.match(/ssh:\/\/([^/]+)\//);
+    return match ? match[1] : null;
+  }
+  return null;
 }
 
 function logInputs(inputs) {
@@ -42832,7 +42884,23 @@ async function run() {
         sshKnownHostsPath: inputs.sshKnownHostsPath,
         sshStrictHostKeyChecking: inputs.sshStrictHostKeyChecking,
       };
-      await setupSSHAuthentication(sshConfig);
+      
+      // Collect SSH hosts to validate
+      const hostsToValidate = [];
+      if (authMethods.sourceIsSSH) {
+        const sourceHost = extractSSHHostname(inputs.sourceRepo);
+        if (sourceHost) hostsToValidate.push(sourceHost);
+      }
+      if (authMethods.destinationIsSSH) {
+        const destHost = extractSSHHostname(inputs.destinationRepo);
+        if (destHost) hostsToValidate.push(destHost);
+      }
+      // Fallback to github.com if no SSH hosts found (shouldn't happen, but defensive)
+      if (hostsToValidate.length === 0) {
+        hostsToValidate.push("github.com");
+      }
+      
+      await setupSSHAuthentication(sshConfig, hostsToValidate);
     }
 
     // Detect if destination is Gerrit
