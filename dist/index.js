@@ -42255,9 +42255,16 @@ async function setupKnownHosts(sshDir, customKnownHostsPathOrContent) {
 
     // If custom known hosts content is provided, append it
     if (customKnownHostsPathOrContent) {
-      // Check if it looks like a file path (contains '/' or is absolute)
-      const isFilePath = customKnownHostsPathOrContent.includes("/") || 
-                         customKnownHostsPathOrContent.startsWith("~");
+      // Check if it's a file path: 
+      // - Contains '/' (Unix path) or '\' (Windows path)
+      // - Starts with '~' (home directory)
+      // - Is a single-line that looks like a path (no newlines and ends with a file extension or /)
+      const firstLine = customKnownHostsPathOrContent.split("\n")[0].trim();
+      const hasNewlines = customKnownHostsPathOrContent.includes("\n");
+      const isFilePath = 
+        (customKnownHostsPathOrContent.includes("/") || customKnownHostsPathOrContent.includes("\\")) &&
+        !hasNewlines &&
+        !firstLine.includes(" "); // SSH keys have spaces (hostname keytype hash)
 
       if (isFilePath) {
         // It's a file path - read from it
@@ -42273,7 +42280,7 @@ async function setupKnownHosts(sshDir, customKnownHostsPathOrContent) {
           lib_core.warning(`Custom known_hosts file not found: ${expandedPath}`);
         }
       } else {
-        // It's content - treat as host keys (multi-line string)
+        // It's content - treat as host keys (multi-line string or SSH key line)
         hostKeysContent += "\n" + customKnownHostsPathOrContent;
         lib_core.debug("Added custom known_hosts content from input");
       }
