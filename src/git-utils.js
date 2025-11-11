@@ -114,16 +114,27 @@ export async function hasDestinationBeenModified(destRef, sourceRef) {
  * @returns {Promise<boolean>} True if safe to push without force
  */
 export async function isSourceAheadOfDestination(destRef, sourceRef) {
-  const mergeBase = await getMergeBase(destRef, sourceRef);
-  if (!mergeBase) {
-    core.debug(DEBUG_MESSAGES.MERGE_BASE_NOT_FOUND);
-    return false;
-  }
-
   const destCommit = await getRefCommit(destRef);
   if (!destCommit) {
     core.debug(`Destination ref ${destRef} does not exist`);
     return true; // New branch, can push
+  }
+
+  const sourceCommit = await getRefCommit(sourceRef);
+  if (!sourceCommit) {
+    core.debug(`Source ref ${sourceRef} does not exist`);
+    return false; // Source doesn't exist, nothing to push
+  }
+
+  const mergeBase = await getMergeBase(destRef, sourceRef);
+  if (!mergeBase) {
+    // No common history - branches are completely independent
+    // This can happen when destination branch was created independently (e.g., with initial README)
+    // In this case, we need force push to replace it
+    core.debug(
+      `No common history between ${destRef} and ${sourceRef}. Will need force push.`,
+    );
+    return false; // Return false to trigger force push in caller
   }
 
   // Check if destination is the merge base (meaning source is ahead)

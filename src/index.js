@@ -503,7 +503,8 @@ async function syncBranches(
           throw error;
         }
       } else {
-        // Destination doesn't exist yet (new branch)
+        // Destination doesn't exist yet (new branch) OR
+        // Destination exists but has no common history with source (e.g., master → main rename)
         const destCommit = await getRefCommit(destRef);
         if (!destCommit) {
           core.info(`${branch} is a new branch, pushing with force...`);
@@ -515,11 +516,18 @@ async function syncBranches(
           ]);
           core.info(`✓ Branch synced: ${branch}`);
         } else {
-          // This should not happen given we checked for modification above
-          core.error(
-            `Unexpected state: destination exists but is not ahead. This should have been caught earlier.`,
+          // Destination exists but has no common history - this can happen with branch renames
+          // Safe to force push since we already verified the destination hasn't been modified
+          core.info(
+            `Destination branch has no common history with source, pushing with force to replace...`,
           );
-          throw new Error(`Unexpected sync state for branch "${branch}"`);
+          await exec.exec("git", [
+            "push",
+            "origin",
+            `refs/remotes/source/${branch}:refs/heads/${branch}`,
+            "--force",
+          ]);
+          core.info(`✓ Branch synced: ${branch}`);
         }
       }
     }
@@ -594,7 +602,8 @@ async function syncBranches(
         throw error;
       }
     } else {
-      // Destination doesn't exist yet (new branch)
+      // Destination doesn't exist yet (new branch) OR
+      // Destination exists but has no common history with source (e.g., master → main rename)
       const destCommit = await getRefCommit(destRef);
       if (!destCommit) {
         core.info(`Destination branch does not exist, pushing with force...`);
@@ -606,11 +615,18 @@ async function syncBranches(
         ]);
         core.info(`✓ Branch synced: ${actualSourceBranch} → ${destinationBranch}`);
       } else {
-        // This should not happen given we checked for modification above
-        core.error(
-          `Unexpected state: destination exists but is not ahead. This should have been caught earlier.`,
+        // Destination exists but has no common history - this can happen with branch renames
+        // Safe to force push since we already verified the destination hasn't been modified
+        core.info(
+          `Destination branch has no common history with source, pushing with force to replace...`,
         );
-        throw new Error(`Unexpected sync state for branch "${destinationBranch}"`);
+        await exec.exec("git", [
+          "push",
+          "origin",
+          `refs/remotes/source/${actualSourceBranch}:refs/heads/${destinationBranch}`,
+          "--force",
+        ]);
+        core.info(`✓ Branch synced: ${actualSourceBranch} → ${destinationBranch}`);
       }
     }
   }

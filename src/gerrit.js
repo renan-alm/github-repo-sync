@@ -137,16 +137,27 @@ async function hasDestinationBeenModifiedGerrit(destRef, sourceRef) {
  * @returns {Promise<boolean>} True if safe to push without force
  */
 async function isSourceAheadOfDestinationGerrit(destRef, sourceRef) {
-  const mergeBase = await getMergeBaseGerrit(destRef, sourceRef);
-  if (!mergeBase) {
-    core.debug("No common history found between branches");
-    return false;
-  }
-
   const destCommit = await getRefCommitGerrit(destRef);
   if (!destCommit) {
     core.debug(`Destination ref ${destRef} does not exist`);
     return true; // New branch, can push
+  }
+
+  const sourceCommit = await getRefCommitGerrit(sourceRef);
+  if (!sourceCommit) {
+    core.debug(`Source ref ${sourceRef} does not exist`);
+    return false; // Source doesn't exist, nothing to push
+  }
+
+  const mergeBase = await getMergeBaseGerrit(destRef, sourceRef);
+  if (!mergeBase) {
+    // No common history - branches are completely independent
+    // This can happen when destination branch was created independently
+    // In this case, we need force push to replace it
+    core.debug(
+      `No common history between ${destRef} and ${sourceRef}. Will need force push.`,
+    );
+    return false; // Return false to trigger force push in caller
   }
 
   // Check if destination is the merge base (meaning source is ahead)
@@ -328,11 +339,39 @@ export async function syncBranchesGerrit(
           `✓ Branch synced to Gerrit: ${actualSourceBranch} → ${destinationBranch}`,
         );
       } else {
-        // This should not happen given we checked for modification above
-        core.error(
-          `Unexpected state: destination exists but is not ahead. This should have been caught earlier.`,
-        );
-        throw new Error(`Unexpected sync state for branch "${destinationBranch}"`);
+        // Destination doesn't exist yet (new branch) OR
+        // Destination exists but has no common history with source (e.g., master → main rename)
+        const destCommit = await getRefCommitGerrit(destRef);
+        if (!destCommit) {
+          // New branch, safe to push with force
+          core.info(
+            `Destination branch does not exist, pushing to Gerrit with force...`,
+          );
+          await exec.exec("git", [
+            "push",
+            "origin",
+            `refs/remotes/source/${actualSourceBranch}:refs/for/${destinationBranch}`,
+            "--force",
+          ]);
+          core.info(
+            `✓ Branch synced to Gerrit: ${actualSourceBranch} → ${destinationBranch}`,
+          );
+        } else {
+          // Destination exists but has no common history - this can happen with branch renames
+          // Safe to force push since we already verified the destination hasn't been modified
+          core.info(
+            `Destination branch has no common history with source, pushing to Gerrit with force...`,
+          );
+          await exec.exec("git", [
+            "push",
+            "origin",
+            `refs/remotes/source/${actualSourceBranch}:refs/for/${destinationBranch}`,
+            "--force",
+          ]);
+          core.info(
+            `✓ Branch synced to Gerrit: ${actualSourceBranch} → ${destinationBranch}`,
+          );
+        }
       }
     }
   }
