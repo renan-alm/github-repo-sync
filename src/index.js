@@ -315,9 +315,10 @@ async function getMergeBase(destBranch, sourceBranch) {
  * @returns {Promise<string|null>} Commit hash or null if not found
  */
 async function getRefCommit(ref) {
+  let stdout = "";
+  let exitCode = 0;
   try {
-    let stdout = "";
-    await exec.exec("git", ["rev-parse", ref], {
+    exitCode = await exec.exec("git", ["rev-parse", ref], {
       listeners: {
         stdout: (data) => {
           stdout += data.toString();
@@ -325,12 +326,19 @@ async function getRefCommit(ref) {
       },
       ignoreReturnCode: true,
     });
-    const commit = stdout.trim();
-    return commit || null;
   } catch (error) {
     core.debug(`Could not resolve reference: ${error.message}`);
     return null;
   }
+
+  // If git command failed (exit code !== 0), ref doesn't exist
+  if (exitCode !== 0) {
+    core.debug(`Reference ${ref} does not exist (exit code: ${exitCode})`);
+    return null;
+  }
+
+  const commit = stdout.trim();
+  return commit || null;
 }
 
 /**
