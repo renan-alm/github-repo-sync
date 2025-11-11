@@ -41484,6 +41484,120 @@ function isGerritRepository(repoUrl) {
 }
 
 /**
+ * Calculate merge base between destination and source branches
+ * @param {string} destBranch - Destination branch (e.g., origin/main)
+ * @param {string} sourceBranch - Source branch (e.g., source/main)
+ * @returns {Promise<string|null>} Merge base commit hash or null if no common history
+ */
+async function getMergeBaseGerrit(destBranch, sourceBranch) {
+  try {
+    let stdout = "";
+    await exec.exec("git", ["merge-base", destBranch, sourceBranch], {
+      listeners: {
+        stdout: (data) => {
+          stdout += data.toString();
+        },
+      },
+      ignoreReturnCode: true,
+    });
+    const mergeBase = stdout.trim();
+    return mergeBase || null;
+  } catch (error) {
+    lib_core.debug(`Could not find merge base: ${error.message}`);
+    return null;
+  }
+}
+
+/**
+ * Get the commit hash of a reference
+ * @param {string} ref - Git reference (e.g., origin/main, source/main)
+ * @returns {Promise<string|null>} Commit hash or null if not found
+ */
+async function getRefCommitGerrit(ref) {
+  try {
+    let stdout = "";
+    await exec.exec("git", ["rev-parse", ref], {
+      listeners: {
+        stdout: (data) => {
+          stdout += data.toString();
+        },
+      },
+      ignoreReturnCode: true,
+    });
+    const commit = stdout.trim();
+    return commit || null;
+  } catch (error) {
+    lib_core.debug(`Could not resolve reference: ${error.message}`);
+    return null;
+  }
+}
+
+/**
+ * Check if destination branch has been modified (contains commits not in source)
+ * @param {string} destRef - Destination ref (e.g., origin/main)
+ * @param {string} sourceRef - Source ref (e.g., source/main)
+ * @returns {Promise<object>} Object with { isModified: boolean, details: string }
+ */
+async function hasDestinationBeenModifiedGerrit(destRef, sourceRef) {
+  const mergeBase = await getMergeBaseGerrit(destRef, sourceRef);
+  if (!mergeBase) {
+    lib_core.debug("No common history found between branches");
+    return { isModified: false, details: "No common history" };
+  }
+
+  const sourceCommit = await getRefCommitGerrit(sourceRef);
+  const destCommit = await getRefCommitGerrit(destRef);
+
+  if (!destCommit) {
+    // Destination doesn't exist yet, not modified
+    return { isModified: false, details: "Destination branch does not exist" };
+  }
+
+  if (!sourceCommit) {
+    // Source doesn't exist, can't compare
+    return { isModified: false, details: "Source branch does not exist" };
+  }
+
+  // Check if destination has commits that source doesn't have
+  // This happens when: destination !== merge-base (destination is ahead of merge-base)
+  const destIsModified = destCommit !== mergeBase;
+
+  const details = destIsModified
+    ? `Destination has diverged: dest=${destCommit.substring(0, 7)}, merge-base=${mergeBase.substring(0, 7)}`
+    : `Destination is clean: dest=${destCommit.substring(0, 7)}, merge-base=${mergeBase.substring(0, 7)}`;
+
+  lib_core.debug(`Destination modification check: ${details}`);
+  return { isModified: destIsModified, details };
+}
+
+/**
+ * Check if source branch has only new commits ahead of destination
+ * @param {string} destRef - Destination ref (e.g., origin/main)
+ * @param {string} sourceRef - Source ref (e.g., source/main)
+ * @returns {Promise<boolean>} True if safe to push without force
+ */
+async function isSourceAheadOfDestinationGerrit(destRef, sourceRef) {
+  const mergeBase = await getMergeBaseGerrit(destRef, sourceRef);
+  if (!mergeBase) {
+    lib_core.debug("No common history found between branches");
+    return false;
+  }
+
+  const destCommit = await getRefCommitGerrit(destRef);
+  if (!destCommit) {
+    lib_core.debug(`Destination ref ${destRef} does not exist`);
+    return true; // New branch, can push
+  }
+
+  // Check if destination is the merge base (meaning source is ahead)
+  const isAhead = mergeBase === destCommit;
+  lib_core.debug(
+    `Branch comparison: merge-base=${mergeBase.substring(0, 7)}, dest=${destCommit.substring(0, 7)}, source-ahead=${isAhead}`,
+  );
+  return isAhead;
+}
+
+/**
  * Gerrit-specific branch sync using refs/for/* reference
  * This allows pushes to go to Gerrit's review queue instead of direct branch push
  */
@@ -41502,20 +41616,66 @@ async function syncBranchesGerrit(
     for (const branch of branchNames) {
       lib_core.info(`Syncing branch to Gerrit: ${branch}`);
       try {
-        // Push to refs/for/* instead of refs/heads/*
-        // This creates a change/review in Gerrit instead of direct push
-        await exec.exec("git", [
-          "push",
-          "origin",
-          `refs/remotes/source/${branch}:refs/for/${branch}`,
-          "--force",
-        ]);
-        lib_core.info(`✓ Branch synced to Gerrit review queue: ${branch}`);
+        const destRef = `origin/${branch}`;
+        const sourceRef = `source/${branch}`;
+
+        // FIRST: Check if destination has been modified
+        const modCheck = await hasDestinationBeenModifiedGerrit(destRef, sourceRef);
+        if (modCheck.isModified) {
+          const destCommit = await getRefCommitGerrit(destRef);
+          lib_core.error(
+            `❌ SYNC BLOCKED: Destination branch "${branch}" has been modified since last sync.`,
+          );
+          lib_core.error(
+            `   The destination contains commits that don't exist in the source.`,
+          );
+          lib_core.error(`   Details: ${modCheck.details}`);
+          lib_core.error(
+            `   To resolve this, manually merge or rebase the destination changes.`,
+          );
+          throw new Error(
+            `Destination branch "${branch}" has been modified. Manual intervention required.`,
+          );
+        }
+
+        // SECOND: Check if source has new commits to push
+        const isAhead = await isSourceAheadOfDestinationGerrit(destRef, sourceRef);
+
+        if (isAhead) {
+          // Source has only new commits, push to review queue without force
+          lib_core.info(
+            `✓ Destination is clean, source is ahead. Pushing to Gerrit review queue...`,
+          );
+          await exec.exec("git", [
+            "push",
+            "origin",
+            `refs/remotes/source/${branch}:refs/for/${branch}`,
+          ]);
+          lib_core.info(`✓ Branch synced to Gerrit review queue: ${branch}`);
+        } else {
+          // Destination doesn't exist yet (new branch)
+          const destCommit = await getRefCommitGerrit(destRef);
+          if (!destCommit) {
+            // New branch, safe to push with force
+            lib_core.info(`${branch} is a new branch, pushing to Gerrit with force...`);
+            await exec.exec("git", [
+              "push",
+              "origin",
+              `refs/remotes/source/${branch}:refs/for/${branch}`,
+              "--force",
+            ]);
+            lib_core.info(`✓ Branch synced to Gerrit review queue: ${branch}`);
+          } else {
+            // This should not happen given we checked for modification above
+            lib_core.error(
+              `Unexpected state: destination exists but is not ahead. This should have been caught earlier.`,
+            );
+            throw new Error(`Unexpected sync state for branch "${branch}"`);
+          }
+        }
       } catch (error) {
-        lib_core.warning(
-          `⚠ Failed to sync ${branch} to Gerrit review: ${error.message}`,
-        );
-        // Continue with other branches even if one fails
+        lib_core.error(`❌ Failed to sync ${branch}: ${error.message}`);
+        throw error; // Fail the entire action on first branch error
       }
     }
   } else {
@@ -41551,15 +41711,70 @@ async function syncBranchesGerrit(
     lib_core.info(
       `Syncing branch to Gerrit review queue: ${actualSourceBranch} → ${destinationBranch}`,
     );
-    await exec.exec("git", [
-      "push",
-      "origin",
-      `refs/remotes/source/${actualSourceBranch}:refs/for/${destinationBranch}`,
-      "--force",
-    ]);
-    lib_core.info(
-      `✓ Branch synced to Gerrit: ${actualSourceBranch} → ${destinationBranch}`,
-    );
+
+    const destRef = `origin/${destinationBranch}`;
+    const sourceRef = `source/${actualSourceBranch}`;
+
+    // FIRST: Check if destination has been modified
+    const modCheck = await hasDestinationBeenModifiedGerrit(destRef, sourceRef);
+    if (modCheck.isModified) {
+      const destCommit = await getRefCommitGerrit(destRef);
+      lib_core.error(
+        `❌ SYNC BLOCKED: Destination branch "${destinationBranch}" has been modified since last sync.`,
+      );
+      lib_core.error(
+        `   The destination contains commits that don't exist in the source.`,
+      );
+      lib_core.error(`   Details: ${modCheck.details}`);
+      lib_core.error(
+        `   To resolve this, manually merge or rebase the destination changes.`,
+      );
+      throw new Error(
+        `Destination branch "${destinationBranch}" has been modified. Manual intervention required.`,
+      );
+    }
+
+    // SECOND: Check if source has new commits to push
+    const isAhead = await isSourceAheadOfDestinationGerrit(destRef, sourceRef);
+
+    if (isAhead) {
+      // Source has only new commits, push to review queue without force
+      lib_core.info(
+        `✓ Destination is clean, source is ahead. Pushing to Gerrit review queue...`,
+      );
+      await exec.exec("git", [
+        "push",
+        "origin",
+        `refs/remotes/source/${actualSourceBranch}:refs/for/${destinationBranch}`,
+      ]);
+      lib_core.info(
+        `✓ Branch synced to Gerrit: ${actualSourceBranch} → ${destinationBranch}`,
+      );
+    } else {
+      // Destination doesn't exist yet (new branch)
+      const destCommit = await getRefCommitGerrit(destRef);
+      if (!destCommit) {
+        // New branch, safe to push with force
+        lib_core.info(
+          `Destination branch does not exist, pushing to Gerrit with force...`,
+        );
+        await exec.exec("git", [
+          "push",
+          "origin",
+          `refs/remotes/source/${actualSourceBranch}:refs/for/${destinationBranch}`,
+          "--force",
+        ]);
+        lib_core.info(
+          `✓ Branch synced to Gerrit: ${actualSourceBranch} → ${destinationBranch}`,
+        );
+      } else {
+        // This should not happen given we checked for modification above
+        lib_core.error(
+          `Unexpected state: destination exists but is not ahead. This should have been caught earlier.`,
+        );
+        throw new Error(`Unexpected sync state for branch "${destinationBranch}"`);
+      }
+    }
   }
 }
 
@@ -41624,9 +41839,17 @@ async function syncTagsGerrit(syncTags) {
       await exec.exec("git", ["fetch", "source", "--tags"]);
       lib_core.info("✓ Tags fetched");
 
-      lib_core.info("Pushing tags to Gerrit...");
-      await exec.exec("git", ["push", "origin", "--tags", "--force"]);
-      lib_core.info("✓ Tags pushed to Gerrit");
+      lib_core.info("Pushing tags to Gerrit without force...");
+      try {
+        await exec.exec("git", ["push", "origin", "--tags"]);
+        lib_core.info("✓ Tags pushed to Gerrit");
+      } catch (error) {
+        lib_core.warning(
+          `⚠ Tag push failed (may have conflicting tags), retrying with force: ${error.message}`,
+        );
+        await exec.exec("git", ["push", "origin", "--tags", "--force"]);
+        lib_core.info("✓ Tags pushed to Gerrit (with force)");
+      }
     } catch (error) {
       lib_core.warning(`⚠ Tag sync failed: ${error.message}`);
     }
@@ -41656,13 +41879,25 @@ async function syncTagsGerrit(syncTags) {
       for (const tag of matchingTags) {
         if (tag) {
           lib_core.info(`Pushing tag to Gerrit: ${tag}`);
-          await exec.exec("git", [
-            "push",
-            "origin",
-            `refs/tags/${tag}:refs/tags/${tag}`,
-            "--force",
-          ]);
-          lib_core.info(`✓ Tag pushed to Gerrit: ${tag}`);
+          try {
+            await exec.exec("git", [
+              "push",
+              "origin",
+              `refs/tags/${tag}:refs/tags/${tag}`,
+            ]);
+            lib_core.info(`✓ Tag pushed to Gerrit: ${tag}`);
+          } catch (error) {
+            lib_core.warning(
+              `⚠ Tag push failed (may be conflicting), retrying with force: ${tag}`,
+            );
+            await exec.exec("git", [
+              "push",
+              "origin",
+              `refs/tags/${tag}:refs/tags/${tag}`,
+              "--force",
+            ]);
+            lib_core.info(`✓ Tag pushed to Gerrit (with force): ${tag}`);
+          }
         }
       }
     } catch (error) {
@@ -42724,6 +42959,120 @@ async function getTryFallbackBranch(availableBranches) {
   return null;
 }
 
+/**
+ * Calculate merge base between destination and source branches
+ * @param {string} destBranch - Destination branch (e.g., origin/main)
+ * @param {string} sourceBranch - Source branch (e.g., source/main)
+ * @returns {Promise<string|null>} Merge base commit hash or null if no common history
+ */
+async function getMergeBase(destBranch, sourceBranch) {
+  try {
+    let stdout = "";
+    await exec.exec("git", ["merge-base", destBranch, sourceBranch], {
+      listeners: {
+        stdout: (data) => {
+          stdout += data.toString();
+        },
+      },
+      ignoreReturnCode: true,
+    });
+    const mergeBase = stdout.trim();
+    return mergeBase || null;
+  } catch (error) {
+    lib_core.debug(`Could not find merge base: ${error.message}`);
+    return null;
+  }
+}
+
+/**
+ * Get the commit hash of a reference
+ * @param {string} ref - Git reference (e.g., origin/main, source/main)
+ * @returns {Promise<string|null>} Commit hash or null if not found
+ */
+async function getRefCommit(ref) {
+  try {
+    let stdout = "";
+    await exec.exec("git", ["rev-parse", ref], {
+      listeners: {
+        stdout: (data) => {
+          stdout += data.toString();
+        },
+      },
+      ignoreReturnCode: true,
+    });
+    const commit = stdout.trim();
+    return commit || null;
+  } catch (error) {
+    lib_core.debug(`Could not resolve reference: ${error.message}`);
+    return null;
+  }
+}
+
+/**
+ * Check if destination branch has been modified (contains commits not in source)
+ * @param {string} destRef - Destination ref (e.g., origin/main)
+ * @param {string} sourceRef - Source ref (e.g., source/main)
+ * @returns {Promise<object>} Object with { isModified: boolean, details: string }
+ */
+async function hasDestinationBeenModified(destRef, sourceRef) {
+  const mergeBase = await getMergeBase(destRef, sourceRef);
+  if (!mergeBase) {
+    lib_core.debug("No common history found between branches");
+    return { isModified: false, details: "No common history" };
+  }
+
+  const sourceCommit = await getRefCommit(sourceRef);
+  const destCommit = await getRefCommit(destRef);
+
+  if (!destCommit) {
+    // Destination doesn't exist yet, not modified
+    return { isModified: false, details: "Destination branch does not exist" };
+  }
+
+  if (!sourceCommit) {
+    // Source doesn't exist, can't compare
+    return { isModified: false, details: "Source branch does not exist" };
+  }
+
+  // Check if destination has commits that source doesn't have
+  // This happens when: destination !== merge-base (destination is ahead of merge-base)
+  const destIsModified = destCommit !== mergeBase;
+
+  const details = destIsModified
+    ? `Destination has diverged: dest=${destCommit.substring(0, 7)}, merge-base=${mergeBase.substring(0, 7)}`
+    : `Destination is clean: dest=${destCommit.substring(0, 7)}, merge-base=${mergeBase.substring(0, 7)}`;
+
+  lib_core.debug(`Destination modification check: ${details}`);
+  return { isModified: destIsModified, details };
+}
+
+/**
+ * Check if source branch has only new commits ahead of destination
+ * @param {string} destRef - Destination ref (e.g., origin/main)
+ * @param {string} sourceRef - Source ref (e.g., source/main)
+ * @returns {Promise<boolean>} True if safe to push without force
+ */
+async function isSourceAheadOfDestination(destRef, sourceRef) {
+  const mergeBase = await getMergeBase(destRef, sourceRef);
+  if (!mergeBase) {
+    lib_core.debug("No common history found between branches");
+    return false;
+  }
+
+  const destCommit = await getRefCommit(destRef);
+  if (!destCommit) {
+    lib_core.debug(`Destination ref ${destRef} does not exist`);
+    return true; // New branch, can push
+  }
+
+  // Check if destination is the merge base (meaning source is ahead)
+  const isAhead = mergeBase === destCommit;
+  lib_core.debug(
+    `Branch comparison: merge-base=${mergeBase.substring(0, 7)}, dest=${destCommit.substring(0, 7)}, source-ahead=${isAhead}`,
+  );
+  return isAhead;
+}
+
 async function syncBranches(
   sourceBranch,
   destinationBranch,
@@ -42777,13 +43126,66 @@ async function syncBranches(
     // Push all source branches to destination
     for (const branch of sourceBranchNames) {
       lib_core.info(`Syncing branch: ${branch}`);
-      await exec.exec("git", [
-        "push",
-        "origin",
-        `refs/remotes/source/${branch}:refs/heads/${branch}`,
-        "--force",
-      ]);
-      lib_core.info(`✓ Branch synced: ${branch}`);
+
+      const destRef = `origin/${branch}`;
+      const sourceRef = `source/${branch}`;
+
+      // FIRST: Check if destination has been modified
+      const modCheck = await hasDestinationBeenModified(destRef, sourceRef);
+      if (modCheck.isModified) {
+        const destCommit = await getRefCommit(destRef);
+        lib_core.error(
+          `❌ SYNC BLOCKED: Destination branch "${branch}" has been modified since last sync.`,
+        );
+        lib_core.error(
+          `   The destination contains commits that don't exist in the source.`,
+        );
+        lib_core.error(`   Details: ${modCheck.details}`);
+        lib_core.error(
+          `   To resolve this, manually merge or rebase the destination changes.`,
+        );
+        throw new Error(
+          `Destination branch "${branch}" has been modified. Manual intervention required.`,
+        );
+      }
+
+      // SECOND: Check if source has new commits to push
+      const isAhead = await isSourceAheadOfDestination(destRef, sourceRef);
+
+      if (isAhead) {
+        // Source has only new commits, can push without force
+        lib_core.info(`✓ Destination is clean, source is ahead. Pushing new commits...`);
+        try {
+          await exec.exec("git", [
+            "push",
+            "origin",
+            `refs/remotes/source/${branch}:refs/heads/${branch}`,
+          ]);
+          lib_core.info(`✓ Branch synced: ${branch}`);
+        } catch (error) {
+          lib_core.error(`Failed to push ${branch}: ${error.message}`);
+          throw error;
+        }
+      } else {
+        // Destination doesn't exist yet (new branch)
+        const destCommit = await getRefCommit(destRef);
+        if (!destCommit) {
+          lib_core.info(`${branch} is a new branch, pushing with force...`);
+          await exec.exec("git", [
+            "push",
+            "origin",
+            `refs/remotes/source/${branch}:refs/heads/${branch}`,
+            "--force",
+          ]);
+          lib_core.info(`✓ Branch synced: ${branch}`);
+        } else {
+          // This should not happen given we checked for modification above
+          lib_core.error(
+            `Unexpected state: destination exists but is not ahead. This should have been caught earlier.`,
+          );
+          throw new Error(`Unexpected sync state for branch "${branch}"`);
+        }
+      }
     }
   } else {
     lib_core.info("=== Syncing Single Branch ===");
@@ -42815,13 +43217,66 @@ async function syncBranches(
     }
 
     lib_core.info(`Syncing branch: ${actualSourceBranch} → ${destinationBranch}`);
-    await exec.exec("git", [
-      "push",
-      "origin",
-      `refs/remotes/source/${actualSourceBranch}:refs/heads/${destinationBranch}`,
-      "--force",
-    ]);
-    lib_core.info(`✓ Branch synced: ${actualSourceBranch} → ${destinationBranch}`);
+
+    const destRef = `origin/${destinationBranch}`;
+    const sourceRef = `source/${actualSourceBranch}`;
+
+    // FIRST: Check if destination has been modified
+    const modCheck = await hasDestinationBeenModified(destRef, sourceRef);
+    if (modCheck.isModified) {
+      const destCommit = await getRefCommit(destRef);
+      lib_core.error(
+        `❌ SYNC BLOCKED: Destination branch "${destinationBranch}" has been modified since last sync.`,
+      );
+      lib_core.error(
+        `   The destination contains commits that don't exist in the source.`,
+      );
+      lib_core.error(`   Details: ${modCheck.details}`);
+      lib_core.error(
+        `   To resolve this, manually merge or rebase the destination changes.`,
+      );
+      throw new Error(
+        `Destination branch "${destinationBranch}" has been modified. Manual intervention required.`,
+      );
+    }
+
+    // SECOND: Check if source has new commits to push
+    const isAhead = await isSourceAheadOfDestination(destRef, sourceRef);
+
+    if (isAhead) {
+      // Source has only new commits, can push without force
+      lib_core.info(`✓ Destination is clean, source is ahead. Pushing new commits...`);
+      try {
+        await exec.exec("git", [
+          "push",
+          "origin",
+          `refs/remotes/source/${actualSourceBranch}:refs/heads/${destinationBranch}`,
+        ]);
+        lib_core.info(`✓ Branch synced: ${actualSourceBranch} → ${destinationBranch}`);
+      } catch (error) {
+        lib_core.error(`Failed to push: ${error.message}`);
+        throw error;
+      }
+    } else {
+      // Destination doesn't exist yet (new branch)
+      const destCommit = await getRefCommit(destRef);
+      if (!destCommit) {
+        lib_core.info(`Destination branch does not exist, pushing with force...`);
+        await exec.exec("git", [
+          "push",
+          "origin",
+          `refs/remotes/source/${actualSourceBranch}:refs/heads/${destinationBranch}`,
+          "--force",
+        ]);
+        lib_core.info(`✓ Branch synced: ${actualSourceBranch} → ${destinationBranch}`);
+      } else {
+        // This should not happen given we checked for modification above
+        lib_core.error(
+          `Unexpected state: destination exists but is not ahead. This should have been caught earlier.`,
+        );
+        throw new Error(`Unexpected sync state for branch "${destinationBranch}"`);
+      }
+    }
   }
 }
 
@@ -42832,9 +43287,17 @@ async function syncTags(syncTags) {
     await exec.exec("git", ["fetch", "source", "--tags"]);
     lib_core.info("✓ Tags fetched");
 
-    lib_core.info("Pushing tags...");
-    await exec.exec("git", ["push", "origin", "--tags", "--force"]);
-    lib_core.info("✓ Tags pushed");
+    lib_core.info("Pushing tags without force...");
+    try {
+      await exec.exec("git", ["push", "origin", "--tags"]);
+      lib_core.info("✓ Tags pushed");
+    } catch (error) {
+      lib_core.warning(
+        `⚠ Tag push failed (may have conflicting tags), retrying with force: ${error.message}`,
+      );
+      await exec.exec("git", ["push", "origin", "--tags", "--force"]);
+      lib_core.info("✓ Tags pushed (with force)");
+    }
   } else if (syncTags) {
     lib_core.info("=== Syncing Tags Matching Pattern ===");
     lib_core.info(`Pattern: ${syncTags}`);
@@ -42860,13 +43323,25 @@ async function syncTags(syncTags) {
     for (const tag of matchingTags) {
       if (tag) {
         lib_core.info(`Pushing tag: ${tag}`);
-        await exec.exec("git", [
-          "push",
-          "origin",
-          `refs/tags/${tag}:refs/tags/${tag}`,
-          "--force",
-        ]);
-        lib_core.info(`✓ Tag pushed: ${tag}`);
+        try {
+          await exec.exec("git", [
+            "push",
+            "origin",
+            `refs/tags/${tag}:refs/tags/${tag}`,
+          ]);
+          lib_core.info(`✓ Tag pushed: ${tag}`);
+        } catch (error) {
+          lib_core.warning(
+            `⚠ Tag push failed (may be conflicting), retrying with force: ${tag}`,
+          );
+          await exec.exec("git", [
+            "push",
+            "origin",
+            `refs/tags/${tag}:refs/tags/${tag}`,
+            "--force",
+          ]);
+          lib_core.info(`✓ Tag pushed (with force): ${tag}`);
+        }
       }
     }
   } else {
